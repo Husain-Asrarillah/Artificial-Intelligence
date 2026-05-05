@@ -1,155 +1,101 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.cluster import KMeans
-import os
-import kagglehub
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.pipeline import Pipeline
 import time
 
 # --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Customer Segmentation Tool", page_icon="🛍️", layout="wide")
+st.set_page_config(page_title="Spam Detector AI", page_icon="🚫", layout="wide")
 
-# --- FUNGSI LOAD DATA (DI-CACHE) ---
-@st.cache_data
-def load_data():
-    # Download dataset menggunakan kagglehub
-    path = kagglehub.dataset_download("vjchoudhary7/customer-segmentation-tutorial-in-python")
-    dataset_path = os.path.join(path, "Mall_Customers.csv")
-    df = pd.read_csv(dataset_path)
-    return df
+# --- FUNGSI LOAD & TRAIN MODEL ---
+@st.cache_resource
+def train_model(file_path):
+    # Membaca dataset
+    df = pd.read_csv(file_path)
+    
+    # Menghapus baris kosong jika ada
+    df.dropna(inplace=True)
+    
+    # Menentukan fitur dan target (Sesuaikan nama kolom dengan file CSV-mu)
+    # Berdasarkan filemu: Class (label) dan Message (text)
+    X = df['Message']
+    y = df['Class']
+    
+    # Split data (80% Train, 20% Test)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # Membuat Pipeline: Vektorisasi Teks + Algoritma Naive Bayes
+    # Naive Bayes sangat handal untuk klasifikasi teks/spam
+    model = Pipeline([
+        ('tfidf', TfidfVectorizer()),
+        ('nb', MultinomialNB())
+    ])
+    
+    # Training
+    model.fit(X_train, y_train)
+    accuracy = model.score(X_test, y_test)
+    
+    return model, accuracy, df
 
-# Memuat data
-df_raw = load_data()
-X = df_raw.iloc[:, [3, 4]] # Mengambil Annual Income dan Spending Score
+# Memanggil fungsi training
+# Pastikan nama file sesuai dengan yang kamu upload ke folder yang sama
+try:
+    model, accuracy, df = train_model("Spam_SMS.csv")
+except Exception as e:
+    st.error(f"Gagal memuat file CSV. Pastikan file 'Spam_SMS.csv' ada di folder yang sama. Error: {e}")
+    st.stop()
 
 # --- SIDEBAR ---
-st.sidebar.header("⚙️ Pengaturan Cluster")
-st.sidebar.write("Sesuaikan parameter analisis di bawah ini:")
-
-# Input jumlah cluster dari user
-k_value = st.sidebar.slider("Jumlah Cluster (k)", 2, 10, 5)
+st.sidebar.title("🛡️ Detektor Spam SMS")
+st.sidebar.markdown(f"""
+**Informasi Model:**
+- **Algoritma:** Multinomial Naive Bayes
+- **Akurasi:** `{accuracy*100:.2f}%`
+- **Total Data:** `{len(df)}` baris
+""")
 
 st.sidebar.divider()
-st.sidebar.info("""
-**Info Fitur:**
-- **Annual Income:** Pendapatan Tahunan (k$)
-- **Spending Score:** Skor Pengeluaran (1-100)
-""")
+st.sidebar.write("Contoh Pesan Spam:")
+st.sidebar.caption("'CONGRATULATIONS! You won a $1000 Walmart gift card. Click here to claim...'")
 
 # --- MAIN PAGE ---
-st.title("📊 Customer Segmentation Dashboard")
-st.markdown("""
-Aplikasi ini melakukan segmentasi pelanggan menggunakan algoritma **K-Means Clustering**. 
-Membantu bisnis memahami kelompok pelanggan berdasarkan pendapatan dan kebiasaan belanja mereka.
-""")
+st.title("✉️ AI Message Classifier")
+st.write("Gunakan aplikasi ini untuk mengecek apakah sebuah pesan terindikasi sebagai spam atau pesan normal.")
+
+# Input Pesan dari User
+user_input = st.text_area("Masukkan Pesan SMS di sini:", placeholder="Tulis atau tempel pesan yang ingin diperiksa...", height=150)
+
+# Tombol Analisis
+col1, col2, col3 = st.columns([1,1,1])
+with col2:
+    predict_btn = st.button("🔍 Analisis Pesan", use_container_width=True, type="primary")
 
 st.divider()
 
-# --- BAGIAN 1: ELBOW METHOD & INFORMASI DATA ---
-col_info, col_elbow = st.columns([1, 1.2])
+if predict_btn:
+    if user_input.strip() == "":
+        st.warning("Silakan masukkan teks terlebih dahulu!")
+    else:
+        with st.spinner('Menganalisis pola teks...'):
+            time.sleep(1)
+            prediction = model.predict([user_input])[0]
+            probability = model.predict_proba([user_input])
+            
+        # Tampilan Hasil
+        if prediction.lower() == 'spam':
+            st.error(f"### 🚩 Hasil: **{prediction.upper()}**")
+            st.markdown("⚠️ **Peringatan:** Pesan ini memiliki ciri-ciri penipuan atau spam.")
+        else:
+            st.success(f"### ✅ Hasil: **{prediction.upper()} (HAM)**")
+            st.markdown("Pesan ini terlihat aman dan normal.")
+            
+        # Menampilkan Probabilitas (Keyakinan AI)
+        st.write("**Tingkat Keyakinan AI:**")
+        prob_df = pd.DataFrame(probability, columns=model.classes_)
+        st.dataframe(prob_df.style.format("{:.2%}"), use_container_width=True)
 
-with col_info:
-    st.subheader("📋 Ringkasan Data")
-    st.write(f"Total Baris Data: `{df_raw.shape[0]}`")
-    st.write(f"Fitur yang digunakan: `Annual Income` & `Spending Score`")
-    
-    # Menghitung WCSS untuk Elbow Method
-    wcss = []
-    for i in range(1, 11):
-        # Menambahkan n_init='auto' atau 10 untuk menghindari FutureWarning
-        kmeans_elbow = KMeans(n_clusters=i, init='k-means++', n_init=10, random_state=14)
-        kmeans_elbow.fit(X)
-        wcss.append(kmeans_elbow.inertia_)
-    
-    st.success("Dataset berhasil dimuat dari Kaggle!")
-    st.dataframe(df_raw.describe(), use_container_width=True)
-
-with col_elbow:
-    st.subheader("📈 The Elbow Method")
-    fig_elbow, ax_elbow = plt.subplots(figsize=(7, 4))
-    ax_elbow.plot(range(1, 11), wcss, marker='o', linestyle='--')
-    ax_elbow.set_title('Mencari Jumlah Cluster Optimal')
-    ax_elbow.set_xlabel('Number of Clusters')
-    ax_elbow.set_ylabel('WCSS')
-    st.pyplot(fig_elbow)
-
-st.divider()
-
-# --- BAGIAN 2: PROSES K-MEANS ---
-st.subheader("🚀 Hasil Segmentasi Pelanggan")
-
-# Menjalankan K-Means berdasarkan input slider
-kmeans = KMeans(n_clusters=k_value, init='k-means++', n_init=10, random_state=14)
-with st.spinner('Menghitung cluster...'):
-    time.sleep(0.5)
-    y_kmeans = kmeans.fit_predict(X)
-    centroids = kmeans.cluster_centers_
-
-# Menambahkan hasil cluster ke dataframe
-df_result = X.copy()
-df_result['Cluster'] = y_kmeans
-df_result['CustomerID'] = df_raw['CustomerID']
-
-# Layout untuk Grafik Hasil
-col_chart1, col_chart2 = st.columns([1.5, 1])
-
-with col_chart1:
-    # Visualisasi Scatter Plot
-    st.write("**Visualisasi Sebaran Cluster**")
-    fig_scatter, ax_scatter = plt.subplots(figsize=(10, 6))
-    
-    colors = sns.color_palette("viridis", n_colors=k_value)
-    
-    for i in range(k_value):
-        ax_scatter.scatter(
-            X.iloc[y_kmeans == i, 0], 
-            X.iloc[y_kmeans == i, 1], 
-            s=60, c=[colors[i]], 
-            label=f'Cluster {i+1}',
-            edgecolors='black', linewidth=0.5
-        )
-    
-    # Plot Centroids
-    ax_scatter.scatter(
-        centroids[:, 0], centroids[:, 1], 
-        s=200, c='red', marker='X', 
-        label='Centroids', edgecolors='white'
-    )
-    
-    ax_scatter.set_title("Segmentasi Pelanggan Berdasarkan Pendapatan & Pengeluaran")
-    ax_scatter.set_xlabel("Annual Income (k$)")
-    ax_scatter.set_ylabel("Spending Score (1-100)")
-    ax_scatter.legend()
-    st.pyplot(fig_scatter)
-
-with col_chart2:
-    # Visualisasi Bar Chart Frekuensi
-    st.write("**Distribusi Jumlah Pelanggan**")
-    fig_bar, ax_bar = plt.subplots(figsize=(7, 7.5))
-    data_counts = df_result['Cluster'].value_counts().sort_index()
-    
-    sns.barplot(
-        x=[f"C-{i+1}" for i in data_counts.index], 
-        y=data_counts.values, 
-        palette="viridis", ax=ax_bar
-    )
-    ax_bar.set_ylabel("Jumlah Customer")
-    ax_bar.set_xlabel("Nama Cluster")
-    st.pyplot(fig_bar)
-
-st.divider()
-
-# --- BAGIAN 3: TABEL DATA ---
-with st.expander("🔍 Lihat Hasil Data Lengkap per Cluster"):
-    st.write("Gunakan fitur filter di bawah ini untuk melihat member tiap cluster.")
-    selected_cluster = st.selectbox("Pilih Cluster untuk ditampilkan:", [f"Cluster {i+1}" for i in range(k_value)])
-    
-    cluster_idx = int(selected_cluster.split(" ")[1]) - 1
-    filtered_df = df_result[df_result['Cluster'] == cluster_idx]
-    
-    st.dataframe(filtered_df, use_container_width=True)
-
-# Footer
-st.caption("Dashboard Analisis K-Means | Dibuat untuk Eksplorasi Data Pelanggan")
+# --- BAGIAN DATASET ---
+with st.expander("📊 Lihat Data Referensi (Dataset)"):
+    st.dataframe(df.head(100), use_container_width=True)
